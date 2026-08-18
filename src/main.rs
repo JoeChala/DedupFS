@@ -1,5 +1,7 @@
-use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
+use clap::{Parser, Subcommand};
+mod repository;
 #[derive(Parser)]
 #[command(name = "dedupfs")]
 #[command(about = "A local content-aware storage engine")]
@@ -20,7 +22,14 @@ fn main() {
 
     match cli.command {
         Commands::Init => {
-            println!("DedupFS initialization will be implemented here.");
+            let current_directory = PathBuf::from(".");
+
+            if let Err(error) = repository::init(&current_directory) {
+                eprintln!("Failed to initialize DedupFS: {error}");
+                std::process::exit(1);
+            }
+
+            println!("Initialized DedupFS repository.");
         }
     }
 }
