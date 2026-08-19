@@ -5,12 +5,14 @@ use std::path::Path;
 const DEDUPFS_DIR: &str = ".dedupfs";
 const OBJECTS_DIR: &str = "objects";
 const METADATA_DIR: &str = "metadata";
+const REPOSITORY_MARKER: &str = "repository";
 
 pub fn init(root: &Path) -> io::Result<()> {
     let dedupfs_dir = root.join(DEDUPFS_DIR);
 
     fs::create_dir_all(dedupfs_dir.join(OBJECTS_DIR))?;
     fs::create_dir_all(dedupfs_dir.join(METADATA_DIR))?;
+    fs::File::create(dedupfs_dir.join(REPOSITORY_MARKER))?;
 
     Ok(())
 }
@@ -39,6 +41,7 @@ mod tests {
         assert!(directory.join(".dedupfs").is_dir());
         assert!(directory.join(".dedupfs/objects").is_dir());
         assert!(directory.join(".dedupfs/metadata").is_dir());
+        assert!(directory.join(".dedupfs/repository").is_file());
 
         fs::remove_dir_all(&directory).expect("test directory should be removable");
     }
