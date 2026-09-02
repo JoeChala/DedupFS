@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+
 mod repository;
+
 #[derive(Parser)]
 #[command(name = "dedupfs")]
 #[command(about = "A local content-aware storage engine")]
@@ -13,7 +15,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// initializing a DedupFS repository
+    /// Initialize a DedupFS repository
     Init,
 }
 
@@ -24,12 +26,18 @@ fn main() {
         Commands::Init => {
             let current_directory = PathBuf::from(".");
 
-            if let Err(error) = repository::init(&current_directory) {
-                eprintln!("Failed to initialize DedupFS: {error}");
-                std::process::exit(1);
-            }
+            let repository = match repository::Repository::init(&current_directory) {
+                Ok(repository) => repository,
+                Err(error) => {
+                    eprintln!("Failed to initialize DedupFS: {error}");
+                    std::process::exit(1);
+                }
+            };
 
-            println!("Initialized DedupFS repository.");
+            println!(
+                "Initialized DedupFS repository at {}.",
+                repository.metadata_path().display()
+            );
         }
     }
 }
