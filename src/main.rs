@@ -1,7 +1,8 @@
-use std::path::{PathBuf};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod chunker;
 mod file_reader;
 mod repository;
 

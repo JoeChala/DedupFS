@@ -27,7 +27,7 @@ impl Repository {
     pub fn is_repository(root: &Path) -> bool {
         root.join(DEDUPFS_DIR).join(REPOSITORY_MARKER).is_file()
     }
-    /* 
+    /*
     pub fn objects_path(&self) -> PathBuf {
         self.root.join(DEDUPFS_DIR).join(OBJECTS_DIR)
     }*/
