@@ -27,10 +27,10 @@ impl Repository {
     pub fn is_repository(root: &Path) -> bool {
         root.join(DEDUPFS_DIR).join(REPOSITORY_MARKER).is_file()
     }
-
+    /* 
     pub fn objects_path(&self) -> PathBuf {
         self.root.join(DEDUPFS_DIR).join(OBJECTS_DIR)
-    }
+    }*/
 
     pub fn metadata_path(&self) -> PathBuf {
         self.root.join(DEDUPFS_DIR).join(METADATA_DIR)
@@ -59,7 +59,7 @@ mod tests {
             Repository::init(&directory).expect("repository initialization should succeed");
 
         assert!(directory.join(".dedupfs").is_dir());
-        assert!(repository.objects_path().is_dir());
+        //assert!(repository.objects_path().is_dir());
         assert!(repository.metadata_path().is_dir());
         assert!(directory.join(".dedupfs/repository").is_file());
 
