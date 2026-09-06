@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 mod chunker;
 mod file_reader;
+mod hasher;
 mod repository;
 
 #[derive(Parser)]
