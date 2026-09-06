@@ -27,13 +27,24 @@ impl Repository {
     pub fn is_repository(root: &Path) -> bool {
         root.join(DEDUPFS_DIR).join(REPOSITORY_MARKER).is_file()
     }
-    /*
+
     pub fn objects_path(&self) -> PathBuf {
         self.root.join(DEDUPFS_DIR).join(OBJECTS_DIR)
-    }*/
+    }
 
     pub fn metadata_path(&self) -> PathBuf {
         self.root.join(DEDUPFS_DIR).join(METADATA_DIR)
+    }
+    pub fn open(root: &Path) -> io::Result<Self> {
+        if !Self::is_repository(root) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "not a DedupFS repository",
+            ));
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+        })
     }
 }
 
@@ -99,6 +110,22 @@ mod tests {
         assert!(second.is_ok());
 
         assert!(Repository::is_repository(&directory));
+
+        fs::remove_dir_all(&directory).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn opens_initialized_repository() {
+        let directory = temporary_directory();
+
+        Repository::init(&directory).expect("repository initialization should succeed");
+
+        let repository = Repository::open(&directory).expect("initialized repository should open");
+
+        assert_eq!(
+            repository.objects_path(),
+            directory.join(".dedupfs/objects")
+        );
 
         fs::remove_dir_all(&directory).expect("test directory should be removable");
     }

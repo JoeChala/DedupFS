@@ -1,4 +1,3 @@
-use crate::hasher::Hasher;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
@@ -24,14 +23,14 @@ impl Read for FileReader {
     }
 }
 
-pub fn ingest_file(path: &Path) -> io::Result<u64> {
+pub fn ingest_file(path: &Path, repository: &crate::repository::Repository) -> io::Result<u64> {
     let mut reader = FileReader::open(path)?;
     let chunks = crate::chunker::chunk_reader(&mut reader)?;
 
-    let hasher = crate::hasher::Sha256Hasher;
+    let cas = crate::cas::Cas::new(repository);
 
     for chunk in &chunks {
-        let _hash = hasher.hash(chunk);
+        cas.put(chunk)?;
     }
 
     let total_bytes = chunks.iter().map(|chunk| chunk.len() as u64).sum();

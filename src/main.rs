@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod cas;
 mod chunker;
 mod file_reader;
 mod hasher;
@@ -49,12 +50,15 @@ fn main() {
         Commands::Ingest { path } => {
             let current_directory = PathBuf::from(".");
 
-            if !repository::Repository::is_repository(&current_directory) {
-                eprintln!("Not a DedupFS repository.");
-                std::process::exit(1);
-            }
+            let repository = match repository::Repository::open(&current_directory) {
+                Ok(repository) => repository,
+                Err(error) => {
+                    eprintln!("Failed to open DedupFS repository: {error}");
+                    std::process::exit(1);
+                }
+            };
 
-            match file_reader::ingest_file(&path) {
+            match file_reader::ingest_file(&path, &repository) {
                 Ok(bytes) => {
                     println!("Read {bytes} bytes from {}.", path.display());
                 }
