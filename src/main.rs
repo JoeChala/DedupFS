@@ -66,12 +66,26 @@ fn main() {
                 }
             };
 
+            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
+            {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    eprintln!("Failed to open metadata database: {error}");
+                    std::process::exit(1);
+                }
+            };
+
             let cas = cas::Cas::new(&repository);
             let engine = dedup::DedupEngine::new(&cas);
 
             match engine.ingest(&path) {
                 Ok(manifest) => {
                     let total_chunks = manifest.chunks().len();
+
+                    if let Err(error) = metadata.store_file_manifest(&path, manifest.chunks()) {
+                        eprintln!("Failed to store file metadata: {error}");
+                        std::process::exit(1);
+                    }
 
                     println!("Ingested {} into {} chunks.", path.display(), total_chunks);
                 }
