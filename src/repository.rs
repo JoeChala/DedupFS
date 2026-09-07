@@ -6,6 +6,7 @@ const DEDUPFS_DIR: &str = ".dedupfs";
 const OBJECTS_DIR: &str = "objects";
 const METADATA_DIR: &str = "metadata";
 const REPOSITORY_MARKER: &str = "repository";
+const METADATA_DATABASE: &str = "dedupfs.db";
 
 pub struct Repository {
     root: PathBuf, //struct needs its own path
@@ -35,6 +36,11 @@ impl Repository {
     pub fn metadata_path(&self) -> PathBuf {
         self.root.join(DEDUPFS_DIR).join(METADATA_DIR)
     }
+
+    pub fn metadata_database_path(&self) -> PathBuf {
+        self.metadata_path().join(METADATA_DATABASE)
+    }
+
     pub fn open(root: &Path) -> io::Result<Self> {
         if !Self::is_repository(root) {
             return Err(io::Error::new(

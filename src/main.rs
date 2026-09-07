@@ -7,6 +7,7 @@ mod chunker;
 mod dedup;
 mod file_reader;
 mod hasher;
+mod metadata;
 mod repository;
 
 #[derive(Parser)]
@@ -42,10 +43,16 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let metadata = metadata::MetadataStore::open(&repository.metadata_database_path())
+                .expect("failed to open metadata database");
+
+            metadata
+                .initialize()
+                .expect("failed to initialize metadata database");
 
             println!(
                 "Initialized DedupFS repository at {}.",
-                repository.metadata_path().display()
+                current_directory.join(".dedupfs").display()
             );
         }
         Commands::Ingest { path } => {
