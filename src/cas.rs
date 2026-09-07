@@ -31,7 +31,7 @@ impl Cas {
 
         Ok(hash)
     }
-    /* 
+    /*
     pub fn get(&self, hash: &str) -> io::Result<Vec<u8>> {
         let object_path = self.object_path(hash);
         let data = fs::read(&object_path)?;
@@ -73,7 +73,7 @@ mod tests {
 
         Repository::init(&directory).expect("repository initialization should succeed")
     }
-    
+
     #[test]
     fn stores_data() {
         let repository = temporary_repository();

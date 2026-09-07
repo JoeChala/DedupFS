@@ -23,21 +23,6 @@ impl Read for FileReader {
     }
 }
 
-pub fn ingest_file(path: &Path, repository: &crate::repository::Repository) -> io::Result<u64> {
-    let mut reader = FileReader::open(path)?;
-    let chunks = crate::chunker::chunk_reader(&mut reader)?;
-
-    let cas = crate::cas::Cas::new(repository);
-
-    for chunk in &chunks {
-        cas.put(chunk)?;
-    }
-
-    let total_bytes = chunks.iter().map(|chunk| chunk.len() as u64).sum();
-
-    Ok(total_bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

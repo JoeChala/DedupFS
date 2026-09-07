@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 mod cas;
 mod chunker;
+mod dedup;
 mod file_reader;
 mod hasher;
 mod repository;
@@ -58,9 +59,14 @@ fn main() {
                 }
             };
 
-            match file_reader::ingest_file(&path, &repository) {
-                Ok(bytes) => {
-                    println!("Read {bytes} bytes from {}.", path.display());
+            let cas = cas::Cas::new(&repository);
+            let engine = dedup::DedupEngine::new(&cas);
+
+            match engine.ingest(&path) {
+                Ok(manifest) => {
+                    let total_chunks = manifest.chunks().len();
+
+                    println!("Ingested {} into {} chunks.", path.display(), total_chunks);
                 }
                 Err(error) => {
                     eprintln!("Failed to ingest {}: {error}", path.display());
