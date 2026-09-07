@@ -82,7 +82,9 @@ fn main() {
                 Ok(manifest) => {
                     let total_chunks = manifest.chunks().len();
 
-                    if let Err(error) = metadata.store_file_manifest(&path, manifest.chunks()) {
+                    if let Err(error) =
+                        metadata.store_or_replace_file_manifest(&path, manifest.chunks())
+                    {
                         eprintln!("Failed to store file metadata: {error}");
                         std::process::exit(1);
                     }
