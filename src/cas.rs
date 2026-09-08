@@ -36,6 +36,11 @@ impl Cas {
         fs::read(object_path)
     }
 
+    pub fn remove(&self, hash: &str) -> io::Result<()> {
+        let object_path = self.object_path(hash);
+        fs::remove_file(object_path)
+    }
+
     fn object_path(&self, hash: &str) -> PathBuf {
         self.objects_path.join(hash)
     }

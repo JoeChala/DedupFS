@@ -6,6 +6,7 @@ mod cas;
 mod chunker;
 mod dedup;
 mod file_reader;
+mod gc;
 mod hasher;
 mod metadata;
 mod repository;
@@ -27,9 +28,16 @@ enum Commands {
     Ingest {
         path: PathBuf,
     },
+    // Restore file from saved chunks
     Restore {
         path: PathBuf,
         destination: PathBuf,
+    },
+    // Garbage Collector
+    Gc,
+    // Remove duplicate files
+    Remove {
+        path: PathBuf,
     },
 }
 
@@ -132,6 +140,71 @@ fn main() {
                 }
                 Err(error) => {
                     eprintln!("Failed to restore {}: {error}", path.display());
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::Gc => {
+            let current_directory = PathBuf::from(".");
+
+            let repository = match repository::Repository::open(&current_directory) {
+                Ok(repository) => repository,
+                Err(error) => {
+                    eprintln!("Failed to open DedupFS repository: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
+            {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    eprintln!("Failed to open metadata database: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+            let cas = cas::Cas::new(&repository);
+            let collector = gc::GarbageCollector::new(&metadata, &cas);
+
+            match collector.collect() {
+                Ok(removed) => {
+                    println!("Garbage collection removed {removed} objects.");
+                }
+                Err(error) => {
+                    eprintln!("Garbage collection failed: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::Remove { path } => {
+            let current_directory = PathBuf::from(".");
+
+            let repository = match repository::Repository::open(&current_directory) {
+                Ok(repository) => repository,
+                Err(error) => {
+                    eprintln!("Failed to open DedupFS repository: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
+            {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    eprintln!("Failed to open metadata database: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+            match metadata.remove_file_manifest(&path) {
+                Ok(()) => {
+                    println!("Removed {} from DedupFS.", path.display());
+                }
+                Err(error) => {
+                    eprintln!("Failed to remove {}: {error}", path.display());
                     std::process::exit(1);
                 }
             }
