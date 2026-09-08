@@ -114,6 +114,29 @@ impl MetadataStore {
             self.store_file_manifest(path, chunk_hashes)
         }
     }
+
+    pub fn get_file_manifest(&self, path: &Path) -> Result<Vec<String>> {
+        let file_id: i64 = self.connection.query_row(
+            "SELECT id FROM files WHERE path = ?1",
+            [path.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )?;
+
+        let mut statement = self.connection.prepare(
+            "
+            SELECT chunk_hash
+            FROM file_chunks
+            WHERE file_id = ?1
+            ORDER BY chunk_index
+            ",
+        )?;
+
+        let chunks = statement
+            .query_map([file_id], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+
+        Ok(chunks)
+    }
 }
 
 #[cfg(test)]
@@ -198,5 +221,27 @@ mod tests {
         assert_eq!(file_count, 1);
         assert_eq!(chunk_count, 1);
         assert_eq!(stored_hash, "hash-three");
+    }
+
+    #[test]
+    fn retrieves_file_manifest_in_chunk_order() {
+        let database_path = PathBuf::from(":memory:");
+
+        let store = MetadataStore::open(&database_path).unwrap();
+        store.initialize().unwrap();
+
+        let chunks = vec![
+            "hash-one".to_string(),
+            "hash-two".to_string(),
+            "hash-three".to_string(),
+        ];
+
+        store
+            .store_file_manifest(Path::new("test.txt"), &chunks)
+            .unwrap();
+
+        let manifest = store.get_file_manifest(Path::new("test.txt")).unwrap();
+
+        assert_eq!(manifest, chunks);
     }
 }

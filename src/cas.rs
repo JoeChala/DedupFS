@@ -31,23 +31,10 @@ impl Cas {
 
         Ok(hash)
     }
-    /*
     pub fn get(&self, hash: &str) -> io::Result<Vec<u8>> {
         let object_path = self.object_path(hash);
-        let data = fs::read(&object_path)?;
-
-        let actual_hash = self.hasher.hash(&data);
-
-        if actual_hash != hash {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "stored object failed integrity check",
-            ));
-        }
-
-        Ok(data)
+        fs::read(object_path)
     }
-    */
 
     fn object_path(&self, hash: &str) -> PathBuf {
         self.objects_path.join(hash)
@@ -145,6 +132,19 @@ mod tests {
                 .unwrap(),
         )
         .expect("test repository should be removable");
+    }
+
+    #[test]
+    fn retrieves_stored_data() {
+        let repository = temporary_repository();
+        let cas = Cas::new(&repository);
+
+        let data = b"hello dedupfs";
+
+        let hash = cas.put(data).unwrap();
+        let retrieved = cas.get(&hash).unwrap();
+
+        assert_eq!(retrieved, data);
     }
     /*
     #[test]

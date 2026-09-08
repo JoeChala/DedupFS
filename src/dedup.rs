@@ -1,8 +1,10 @@
 use std::io;
+use std::path::Path;
 
 use crate::cas::Cas;
 use crate::chunker::chunk_reader;
 use crate::file_reader::FileReader;
+use crate::metadata::MetadataStore;
 
 pub struct FileManifest {
     chunks: Vec<String>,
@@ -16,11 +18,12 @@ impl FileManifest {
 
 pub struct DedupEngine<'a> {
     cas: &'a Cas,
+    metadata: &'a MetadataStore,
 }
 
 impl<'a> DedupEngine<'a> {
-    pub fn new(cas: &'a Cas) -> Self {
-        Self { cas }
+    pub fn new(cas: &'a Cas, metadata: &'a MetadataStore) -> Self {
+        Self { cas, metadata }
     }
 
     pub fn ingest(&self, path: &std::path::Path) -> io::Result<FileManifest> {
@@ -37,6 +40,21 @@ impl<'a> DedupEngine<'a> {
         Ok(FileManifest {
             chunks: chunk_hashes,
         })
+    }
+    pub fn restore(&self, path: &Path, destination: &Path) -> io::Result<()> {
+        let chunk_hashes = self
+            .metadata
+            .get_file_manifest(path)
+            .map_err(io::Error::other)?;
+
+        let mut output = std::fs::File::create(destination)?;
+
+        for hash in chunk_hashes {
+            let chunk = self.cas.get(&hash)?;
+            std::io::Write::write_all(&mut output, &chunk)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -64,8 +82,12 @@ mod tests {
         let repository =
             Repository::init(&directory).expect("repository initialization should succeed");
 
+        let metadata = MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
         let cas = Cas::new(&repository);
-        let engine = DedupEngine::new(&cas);
+        let engine = DedupEngine::new(&cas, &metadata);
 
         let file_path = directory.join("test.txt");
 
@@ -91,8 +113,12 @@ mod tests {
         let repository =
             Repository::init(&directory).expect("repository initialization should succeed");
 
+        let metadata = MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
         let cas = Cas::new(&repository);
-        let engine = DedupEngine::new(&cas);
+        let engine = DedupEngine::new(&cas, &metadata);
 
         let first_path = directory.join("first.txt");
         let second_path = directory.join("second.txt");
@@ -120,8 +146,12 @@ mod tests {
         let repository =
             Repository::init(&directory).expect("repository initialization should succeed");
 
+        let metadata = MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
         let cas = Cas::new(&repository);
-        let engine = DedupEngine::new(&cas);
+        let engine = DedupEngine::new(&cas, &metadata);
 
         let first_path = directory.join("first.txt");
         let second_path = directory.join("second.txt");
@@ -153,8 +183,12 @@ mod tests {
         let repository =
             Repository::init(&directory).expect("repository initialization should succeed");
 
+        let metadata = MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
         let cas = Cas::new(&repository);
-        let engine = DedupEngine::new(&cas);
+        let engine = DedupEngine::new(&cas, &metadata);
 
         let first_path = directory.join("first.txt");
         let second_path = directory.join("second.txt");
@@ -182,8 +216,12 @@ mod tests {
         let repository =
             Repository::init(&directory).expect("repository initialization should succeed");
 
+        let metadata = MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
         let cas = Cas::new(&repository);
-        let engine = DedupEngine::new(&cas);
+        let engine = DedupEngine::new(&cas, &metadata);
 
         let missing_path = directory.join("missing.txt");
 
@@ -192,5 +230,38 @@ mod tests {
         assert!(result.is_err());
 
         fs::remove_dir_all(&directory).expect("test repository should be removable");
+    }
+    #[test]
+    fn restores_ingested_file() {
+        let temp_directory = temporary_directory();
+        std::fs::create_dir_all(&temp_directory).unwrap();
+
+        let repository = Repository::init(&temp_directory).unwrap();
+
+        let metadata = MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
+        let cas = Cas::new(&repository);
+        let engine = DedupEngine::new(&cas, &metadata);
+
+        let original_path = temp_directory.join("original.txt");
+        let restored_path = temp_directory.join("restored.txt");
+
+        let original_data = b"hello dedupfs reconstruction";
+
+        std::fs::write(&original_path, original_data).unwrap();
+
+        let manifest = engine.ingest(&original_path).unwrap();
+
+        metadata
+            .store_or_replace_file_manifest(&original_path, manifest.chunks())
+            .unwrap();
+
+        engine.restore(&original_path, &restored_path).unwrap();
+
+        let restored_data = std::fs::read(&restored_path).unwrap();
+
+        assert_eq!(restored_data, original_data);
     }
 }

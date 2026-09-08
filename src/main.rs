@@ -27,6 +27,10 @@ enum Commands {
     Ingest {
         path: PathBuf,
     },
+    Restore {
+        path: PathBuf,
+        destination: PathBuf,
+    },
 }
 
 fn main() {
@@ -55,6 +59,7 @@ fn main() {
                 current_directory.join(".dedupfs").display()
             );
         }
+
         Commands::Ingest { path } => {
             let current_directory = PathBuf::from(".");
 
@@ -76,7 +81,7 @@ fn main() {
             };
 
             let cas = cas::Cas::new(&repository);
-            let engine = dedup::DedupEngine::new(&cas);
+            let engine = dedup::DedupEngine::new(&cas, &metadata);
 
             match engine.ingest(&path) {
                 Ok(manifest) => {
@@ -93,6 +98,40 @@ fn main() {
                 }
                 Err(error) => {
                     eprintln!("Failed to ingest {}: {error}", path.display());
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::Restore { path, destination } => {
+            let current_directory = PathBuf::from(".");
+
+            let repository = match repository::Repository::open(&current_directory) {
+                Ok(repository) => repository,
+                Err(error) => {
+                    eprintln!("Failed to open DedupFS repository: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
+            {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    eprintln!("Failed to open metadata database: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+            let cas = cas::Cas::new(&repository);
+            let engine = dedup::DedupEngine::new(&cas, &metadata);
+
+            match engine.restore(&path, &destination) {
+                Ok(()) => {
+                    println!("Restored {} to {}.", path.display(), destination.display());
+                }
+                Err(error) => {
+                    eprintln!("Failed to restore {}: {error}", path.display());
                     std::process::exit(1);
                 }
             }
