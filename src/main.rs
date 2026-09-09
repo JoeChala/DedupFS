@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
@@ -39,9 +39,32 @@ enum Commands {
     Remove {
         path: PathBuf,
     },
+    Snapshot {
+        #[command(subcommand)]
+        command: SnapshotCommand,
+    },
+}
+#[derive(Subcommand)]
+#[command(name = "snapshot")]
+enum SnapshotCommand {
+    Create {
+        name: String,
+    },
+
+    List,
+
+    Delete {
+        name: String,
+    },
+
+    Restore {
+        name: String,
+        path: PathBuf,
+        destination: PathBuf,
+    },
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -209,5 +232,50 @@ fn main() {
                 }
             }
         }
+        Commands::Snapshot { command } => {
+            let repository = repository::Repository::open(Path::new("."))?;
+
+            let metadata = metadata::MetadataStore::open(&repository.metadata_database_path())?;
+
+            match command {
+                SnapshotCommand::Create { name } => {
+                    metadata.create_snapshot(&name)?;
+                    println!("Snapshot '{name}' created.");
+                }
+
+                SnapshotCommand::List => {
+                    let snapshots = metadata.list_snapshots()?;
+
+                    for snapshot in snapshots {
+                        println!("{}  {}", snapshot.id, snapshot.name);
+                    }
+                }
+
+                SnapshotCommand::Delete { name } => {
+                    metadata.delete_snapshot(&name)?;
+                    println!("Snapshot '{name}' deleted.");
+                }
+
+                SnapshotCommand::Restore {
+                    name,
+                    path,
+                    destination,
+                } => {
+                    let cas = cas::Cas::new(&repository);
+
+                    let engine = dedup::DedupEngine::new(&cas, &metadata);
+
+                    engine.restore_snapshot(&name, &path, &destination)?;
+
+                    println!(
+                        "Restored '{}' from snapshot '{}' to '{}'.",
+                        path.display(),
+                        name,
+                        destination.display()
+                    );
+                }
+            }
+        }
     }
+    Ok(())
 }

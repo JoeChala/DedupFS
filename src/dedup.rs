@@ -56,6 +56,26 @@ impl<'a> DedupEngine<'a> {
 
         Ok(())
     }
+    pub fn restore_snapshot(
+        &self,
+        snapshot: &str,
+        path: &Path,
+        destination: &Path,
+    ) -> io::Result<()> {
+        let chunk_hashes = self
+            .metadata
+            .get_snapshot_manifest(snapshot, path)
+            .map_err(io::Error::other)?;
+
+        let mut output = std::fs::File::create(destination)?;
+
+        for hash in chunk_hashes {
+            let chunk = self.cas.get(&hash)?;
+            std::io::Write::write_all(&mut output, &chunk)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
