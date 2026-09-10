@@ -73,7 +73,7 @@ mod tests {
             .unwrap();
 
         metadata
-            .replace_file_manifest(PathBuf::from("file.txt").as_path(), &[])
+            .remove_file_manifest(PathBuf::from("file.txt").as_path())
             .unwrap();
 
         let collector = GarbageCollector::new(&metadata, &cas);

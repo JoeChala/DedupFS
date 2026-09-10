@@ -52,11 +52,10 @@ impl MetadataStore {
 
             CREATE TABLE IF NOT EXISTS snapshot_files (
                 snapshot_id INTEGER NOT NULL,
-                file_id INTEGER NOT NULL,
+                path TEXT NOT NULL,
                 version_id INTEGER NOT NULL,
-                PRIMARY KEY (snapshot_id, file_id),
+                PRIMARY KEY (snapshot_id, path),
                 FOREIGN KEY (snapshot_id) REFERENCES snapshots(id),
-                FOREIGN KEY (file_id) REFERENCES files(id),
                 FOREIGN KEY (version_id) REFERENCES file_versions(id)
             );
             ",
@@ -145,13 +144,33 @@ impl MetadataStore {
             |row| row.get(0),
         )?;
 
-        // The old version remains in the database because snapshots
-        // may still refer to it.
-        //
-        // Therefore we do NOT decrement its chunk references here.
-        //
-        // The current version is simply changed to a new immutable version.
+        // The current file no longer references the old version.
+        let old_hashes: Vec<String> = {
+            let mut statement = transaction.prepare(
+                "
+                SELECT chunk_hash
+                FROM file_version_chunks
+                WHERE version_id = ?1
+                ",
+            )?;
 
+            let rows = statement.query_map([old_version_id], |row| row.get(0))?;
+
+            rows.collect::<Result<Vec<String>>>()?
+        };
+
+        for hash in old_hashes {
+            transaction.execute(
+                "
+                UPDATE chunks
+                SET reference_count = reference_count - 1
+                WHERE hash = ?1
+                ",
+                [&hash],
+            )?;
+        }
+
+        // Create the new immutable version.
         transaction.execute("INSERT INTO file_versions (file_id) VALUES (?1)", [file_id])?;
 
         let new_version_id = transaction.last_insert_rowid();
@@ -182,10 +201,28 @@ impl MetadataStore {
             rusqlite::params![new_version_id, file_id],
         )?;
 
-        transaction.commit()?;
+        // If no snapshot refers to the old version anymore,
+        // it is now dead and can be removed.
+        let snapshot_references: i64 = transaction.query_row(
+            "
+            SELECT COUNT(*)
+            FROM snapshot_files
+            WHERE version_id = ?1
+            ",
+            [old_version_id],
+            |row| row.get(0),
+        )?;
 
-        // Keep the old version alive because snapshots may use it.
-        let _ = old_version_id;
+        if snapshot_references == 0 {
+            transaction.execute(
+                "DELETE FROM file_version_chunks WHERE version_id = ?1",
+                [old_version_id],
+            )?;
+
+            transaction.execute("DELETE FROM file_versions WHERE id = ?1", [old_version_id])?;
+        }
+
+        transaction.commit()?;
 
         Ok(())
     }
@@ -206,7 +243,6 @@ impl MetadataStore {
 
         rows.collect()
     }
-
     pub fn remove_file_manifest(&self, path: &Path) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
 
@@ -216,50 +252,59 @@ impl MetadataStore {
             |row| row.get(0),
         )?;
 
-        let version_ids: Vec<i64> = {
-            let mut statement =
-                transaction.prepare("SELECT id FROM file_versions WHERE file_id = ?1")?;
+        let current_version_id: i64 = transaction.query_row(
+            "SELECT current_version_id FROM files WHERE id = ?1",
+            [file_id],
+            |row| row.get(0),
+        )?;
 
-            let rows = statement.query_map([file_id], |row| row.get(0))?;
-
-            rows.collect::<Result<Vec<i64>>>()?
-        };
-
-        for version_id in &version_ids {
-            let hashes: Vec<String> = {
-                let mut statement = transaction.prepare(
-                    "
-                    SELECT chunk_hash
-                    FROM file_version_chunks
-                    WHERE version_id = ?1
-                    ",
-                )?;
-
-                let rows = statement.query_map([version_id], |row| row.get(0))?;
-
-                rows.collect::<Result<Vec<String>>>()?
-            };
-
-            for hash in hashes {
-                transaction.execute(
-                    "
-                    UPDATE chunks
-                    SET reference_count = reference_count - 1
-                    WHERE hash = ?1
-                    ",
-                    [&hash],
-                )?;
-            }
-
-            transaction.execute(
-                "DELETE FROM file_version_chunks WHERE version_id = ?1",
-                [version_id],
+        let hashes: Vec<String> = {
+            let mut statement = transaction.prepare(
+                "
+                SELECT chunk_hash
+                FROM file_version_chunks
+                WHERE version_id = ?1
+                ",
             )?;
 
-            transaction.execute("DELETE FROM file_versions WHERE id = ?1", [version_id])?;
+            let rows = statement.query_map([current_version_id], |row| row.get(0))?;
+
+            rows.collect::<Result<Vec<String>>>()?
+        };
+
+        // The current file is no longer referencing this version.
+        for hash in hashes {
+            transaction.execute(
+                "
+                UPDATE chunks
+                SET reference_count = reference_count - 1
+                WHERE hash = ?1
+                ",
+                [&hash],
+            )?;
         }
 
-        transaction.execute("DELETE FROM snapshot_files WHERE file_id = ?1", [file_id])?;
+        let snapshot_references: i64 = transaction.query_row(
+            "
+            SELECT COUNT(*)
+            FROM snapshot_files
+            WHERE version_id = ?1
+            ",
+            [current_version_id],
+            |row| row.get(0),
+        )?;
+
+        if snapshot_references == 0 {
+            transaction.execute(
+                "DELETE FROM file_version_chunks WHERE version_id = ?1",
+                [current_version_id],
+            )?;
+
+            transaction.execute(
+                "DELETE FROM file_versions WHERE id = ?1",
+                [current_version_id],
+            )?;
+        }
 
         transaction.execute("DELETE FROM files WHERE id = ?1", [file_id])?;
 
@@ -294,7 +339,6 @@ impl MetadataStore {
 
         Ok(())
     }
-
     pub fn create_snapshot(&self, name: &str) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
 
@@ -302,10 +346,10 @@ impl MetadataStore {
 
         let snapshot_id = transaction.last_insert_rowid();
 
-        let files: Vec<(i64, i64)> = {
+        let files: Vec<(String, i64)> = {
             let mut statement = transaction.prepare(
                 "
-                SELECT id, current_version_id
+                SELECT path, current_version_id
                 FROM files
                 WHERE current_version_id IS NOT NULL
                 ",
@@ -313,17 +357,17 @@ impl MetadataStore {
 
             let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
 
-            rows.collect::<Result<Vec<(i64, i64)>>>()?
+            rows.collect::<Result<Vec<(String, i64)>>>()?
         };
 
-        for (file_id, version_id) in files {
+        for (path, version_id) in files {
             transaction.execute(
                 "
                 INSERT INTO snapshot_files
-                    (snapshot_id, file_id, version_id)
+                    (snapshot_id, path, version_id)
                 VALUES (?1, ?2, ?3)
                 ",
-                rusqlite::params![snapshot_id, file_id, version_id],
+                rusqlite::params![snapshot_id, path, version_id],
             )?;
 
             let hashes: Vec<String> = {
@@ -340,6 +384,7 @@ impl MetadataStore {
                 rows.collect::<Result<Vec<String>>>()?
             };
 
+            // Snapshot now holds a reference to this version's chunks.
             for hash in hashes {
                 transaction.execute(
                     "
@@ -413,6 +458,7 @@ impl MetadataStore {
                 rows.collect::<Result<Vec<String>>>()?
             };
 
+            // Snapshot releases its references.
             for hash in hashes {
                 transaction.execute(
                     "
@@ -422,6 +468,38 @@ impl MetadataStore {
                     ",
                     [&hash],
                 )?;
+            }
+
+            // If the version isn't current anymore, and this was its
+            // last snapshot reference, the version itself is dead.
+            let current_reference_count: i64 = transaction.query_row(
+                "
+                SELECT COUNT(*)
+                FROM files
+                WHERE current_version_id = ?1
+                ",
+                [version_id],
+                |row| row.get(0),
+            )?;
+
+            let remaining_snapshot_references: i64 = transaction.query_row(
+                "
+                SELECT COUNT(*)
+                FROM snapshot_files
+                WHERE version_id = ?1
+                AND snapshot_id != ?2
+                ",
+                rusqlite::params![version_id, snapshot_id],
+                |row| row.get(0),
+            )?;
+
+            if current_reference_count == 0 && remaining_snapshot_references == 0 {
+                transaction.execute(
+                    "DELETE FROM file_version_chunks WHERE version_id = ?1",
+                    [version_id],
+                )?;
+
+                transaction.execute("DELETE FROM file_versions WHERE id = ?1", [version_id])?;
             }
         }
 
@@ -436,7 +514,6 @@ impl MetadataStore {
 
         Ok(())
     }
-
     pub fn get_snapshot_manifest(&self, name: &str, path: &Path) -> Result<Vec<String>> {
         let mut statement = self.connection.prepare(
             "
@@ -444,12 +521,10 @@ impl MetadataStore {
             FROM snapshots s
             JOIN snapshot_files sf
                 ON s.id = sf.snapshot_id
-            JOIN files f
-                ON sf.file_id = f.id
             JOIN file_version_chunks fvc
                 ON sf.version_id = fvc.version_id
             WHERE s.name = ?1
-              AND f.path = ?2
+            AND sf.path = ?2
             ORDER BY fvc.chunk_index
             ",
         )?;
@@ -497,7 +572,9 @@ mod tests {
 
         let chunk_count: i64 = store
             .connection
-            .query_row("SELECT COUNT(*) FROM file_version_chunks", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM file_version_chunks", [], |row| {
+                row.get(0)
+            })
             .unwrap();
 
         assert_eq!(file_count, 1);
@@ -525,7 +602,9 @@ mod tests {
 
         let manifest_count: i64 = store
             .connection
-            .query_row("SELECT COUNT(*) FROM file_version_chunks", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM file_version_chunks", [], |row| {
+                row.get(0)
+            })
             .unwrap();
 
         let references: i64 = store
@@ -600,6 +679,44 @@ mod tests {
             )
             .unwrap();
 
+        assert_eq!(old_count, 0);
+        assert_eq!(new_count, 1);
+    }
+    #[test]
+    fn snapshot_keeps_old_version_alive() {
+        let database_path = PathBuf::from(":memory:");
+
+        let store = MetadataStore::open(&database_path).unwrap();
+        store.initialize().unwrap();
+
+        store
+            .store_file_manifest(Path::new("test.txt"), &["old-hash".to_string()])
+            .unwrap();
+
+        store.create_snapshot("first").unwrap();
+
+        store
+            .replace_file_manifest(Path::new("test.txt"), &["new-hash".to_string()])
+            .unwrap();
+
+        let old_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT reference_count FROM chunks WHERE hash = 'old-hash'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let new_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT reference_count FROM chunks WHERE hash = 'new-hash'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
         assert_eq!(old_count, 1);
         assert_eq!(new_count, 1);
     }
@@ -629,7 +746,9 @@ mod tests {
 
         let chunk_count: i64 = store
             .connection
-            .query_row("SELECT COUNT(*) FROM file_version_chunks", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM file_version_chunks", [], |row| {
+                row.get(0)
+            })
             .unwrap();
 
         let stored_hash: String = store
@@ -674,5 +793,42 @@ mod tests {
         let manifest = store.get_file_manifest(Path::new("test.txt")).unwrap();
 
         assert_eq!(manifest, chunks);
+    }
+    #[test]
+    fn deleting_snapshot_releases_chunk_references() {
+        let database_path = PathBuf::from(":memory:");
+
+        let store = MetadataStore::open(&database_path).unwrap();
+        store.initialize().unwrap();
+
+        store
+            .store_file_manifest(Path::new("test.txt"), &["hash-one".to_string()])
+            .unwrap();
+
+        store.create_snapshot("first").unwrap();
+
+        let before_delete: i64 = store
+            .connection
+            .query_row(
+                "SELECT reference_count FROM chunks WHERE hash = 'hash-one'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(before_delete, 2);
+
+        store.delete_snapshot("first").unwrap();
+
+        let after_delete: i64 = store
+            .connection
+            .query_row(
+                "SELECT reference_count FROM chunks WHERE hash = 'hash-one'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(after_delete, 1);
     }
 }
