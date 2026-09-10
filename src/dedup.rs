@@ -1,5 +1,7 @@
 use std::io;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
 
 use crate::cas::Cas;
 use crate::chunker::chunk_reader;
@@ -41,6 +43,7 @@ impl<'a> DedupEngine<'a> {
             chunks: chunk_hashes,
         })
     }
+
     pub fn restore(&self, path: &Path, destination: &Path) -> io::Result<()> {
         let chunk_hashes = self
             .metadata
@@ -56,6 +59,7 @@ impl<'a> DedupEngine<'a> {
 
         Ok(())
     }
+
     pub fn restore_snapshot(
         &self,
         snapshot: &str,
@@ -75,6 +79,92 @@ impl<'a> DedupEngine<'a> {
         }
 
         Ok(())
+    }
+
+    pub fn ingest_parallel(&self, path: &Path, worker_count: usize) -> io::Result<FileManifest> {
+        if worker_count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "worker count must be greater than zero",
+            ));
+        }
+
+        let mut reader = FileReader::open(path)?;
+        let chunks = chunk_reader(&mut reader)?;
+
+        let (work_sender, work_receiver) = mpsc::channel::<(usize, Vec<u8>)>();
+
+        let (result_sender, result_receiver) = mpsc::channel::<io::Result<(usize, String)>>();
+
+        let mut workers = Vec::with_capacity(worker_count);
+
+        // mpsc::Receiver is not clonable, so put it behind a Mutex.
+        let work_receiver = std::sync::Arc::new(std::sync::Mutex::new(work_receiver));
+
+        for _ in 0..worker_count {
+            let receiver = std::sync::Arc::clone(&work_receiver);
+            let sender = result_sender.clone();
+            let cas = self.cas.clone();
+
+            let worker = thread::spawn(move || {
+                loop {
+                    let work = {
+                        let receiver = receiver
+                            .lock()
+                            .expect("work receiver mutex should not be poisoned");
+
+                        receiver.recv()
+                    };
+
+                    let (index, chunk) = match work {
+                        Ok(work) => work,
+                        Err(_) => break,
+                    };
+
+                    let result = cas.put(&chunk).map(|hash| (index, hash));
+
+                    if sender.send(result).is_err() {
+                        break;
+                    }
+                }
+            });
+
+            workers.push(worker);
+        }
+
+        // The coordinator no longer needs its copy once all work has
+        // been sent, so we can drop the original result sender later.
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            work_sender.send((index, chunk)).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "worker threads stopped unexpectedly",
+                )
+            })?;
+        }
+
+        drop(work_sender);
+        drop(result_sender);
+
+        let mut results = Vec::new();
+
+        for result in result_receiver {
+            results.push(result?);
+        }
+
+        for worker in workers {
+            worker
+                .join()
+                .map_err(|_| io::Error::other("worker thread panicked"))?;
+        }
+
+        results.sort_unstable_by_key(|(index, _)| *index);
+
+        let chunk_hashes = results.into_iter().map(|(_, hash)| hash).collect();
+
+        Ok(FileManifest {
+            chunks: chunk_hashes,
+        })
     }
 }
 
@@ -283,5 +373,65 @@ mod tests {
         let restored_data = std::fs::read(&restored_path).unwrap();
 
         assert_eq!(restored_data, original_data);
+    }
+
+    #[test]
+    fn parallel_ingestion_preserves_chunk_order() {
+        let temp_directory = temporary_directory();
+        std::fs::create_dir_all(&temp_directory).unwrap();
+
+        let repository = crate::repository::Repository::init(&temp_directory).unwrap();
+
+        let metadata =
+            crate::metadata::MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
+        let cas = crate::cas::Cas::new(&repository);
+
+        let engine = DedupEngine::new(&cas, &metadata);
+
+        let input_path = temp_directory.join("input.txt");
+
+        let data = (0..5000)
+            .map(|value| (value % 256) as u8)
+            .collect::<Vec<u8>>();
+
+        std::fs::write(&input_path, &data).unwrap();
+
+        let sequential_manifest = engine.ingest(&input_path).unwrap();
+
+        let parallel_manifest = engine.ingest_parallel(&input_path, 4).unwrap();
+
+        assert_eq!(sequential_manifest.chunks(), parallel_manifest.chunks());
+
+        std::fs::remove_dir_all(&temp_directory).unwrap();
+    }
+
+    #[test]
+    fn parallel_ingestion_rejects_zero_workers() {
+        let temp_directory = temporary_directory();
+        std::fs::create_dir_all(&temp_directory).unwrap();
+
+        let repository = crate::repository::Repository::init(&temp_directory).unwrap();
+
+        let metadata =
+            crate::metadata::MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
+        let cas = crate::cas::Cas::new(&repository);
+
+        let engine = DedupEngine::new(&cas, &metadata);
+
+        let input_path = temp_directory.join("input.txt");
+
+        std::fs::write(&input_path, b"hello").unwrap();
+
+        let result = engine.ingest_parallel(&input_path, 0);
+
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(&temp_directory).unwrap();
     }
 }

@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 pub trait Hasher {
     fn hash(&self, data: &[u8]) -> String;
 }
-
+#[derive(Clone, Copy)]
 pub struct Sha256Hasher;
 
 impl Hasher for Sha256Hasher {

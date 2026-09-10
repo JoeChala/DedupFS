@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::hasher::{Hasher, Sha256Hasher};
 use crate::repository::Repository;
 
+#[derive(Clone)]
 pub struct Cas {
     objects_path: PathBuf,
     hasher: Sha256Hasher,

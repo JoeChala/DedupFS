@@ -27,6 +27,9 @@ enum Commands {
     // Ingest a file
     Ingest {
         path: PathBuf,
+
+        #[arg(short, long, default_value_t = 4)]
+        workers: usize,
     },
     // Restore file from saved chunks
     Restore {
@@ -91,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        Commands::Ingest { path } => {
+        Commands::Ingest { path, workers } => {
             let current_directory = PathBuf::from(".");
 
             let repository = match repository::Repository::open(&current_directory) {
@@ -114,7 +117,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cas = cas::Cas::new(&repository);
             let engine = dedup::DedupEngine::new(&cas, &metadata);
 
-            match engine.ingest(&path) {
+            let ingestion_result = if workers == 1 {
+                engine.ingest(&path)
+            } else {
+                engine.ingest_parallel(&path, workers)
+            };
+
+            match ingestion_result {
                 Ok(manifest) => {
                     let total_chunks = manifest.chunks().len();
 
@@ -125,7 +134,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         std::process::exit(1);
                     }
 
-                    println!("Ingested {} into {} chunks.", path.display(), total_chunks);
+                    println!(
+                        "Ingested {} into {} chunks using {} worker(s).",
+                        path.display(),
+                        total_chunks,
+                        workers
+                    );
                 }
                 Err(error) => {
                     eprintln!("Failed to ingest {}: {error}", path.display());
