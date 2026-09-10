@@ -420,7 +420,6 @@ impl MetadataStore {
 
         rows.collect()
     }
-
     pub fn delete_snapshot(&self, name: &str) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
 
@@ -429,6 +428,7 @@ impl MetadataStore {
                 row.get(0)
             })?;
 
+        // Remember which versions this snapshot references.
         let version_ids: Vec<i64> = {
             let mut statement = transaction.prepare(
                 "
@@ -442,6 +442,15 @@ impl MetadataStore {
 
             rows.collect::<Result<Vec<i64>>>()?
         };
+
+        // Remove this snapshot's references first.
+        //
+        // This must happen before deleting file_versions because
+        // snapshot_files.version_id is a foreign key to file_versions.id.
+        transaction.execute(
+            "DELETE FROM snapshot_files WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )?;
 
         for version_id in version_ids {
             let hashes: Vec<String> = {
@@ -458,7 +467,7 @@ impl MetadataStore {
                 rows.collect::<Result<Vec<String>>>()?
             };
 
-            // Snapshot releases its references.
+            // The deleted snapshot no longer references these chunks.
             for hash in hashes {
                 transaction.execute(
                     "
@@ -470,8 +479,8 @@ impl MetadataStore {
                 )?;
             }
 
-            // If the version isn't current anymore, and this was its
-            // last snapshot reference, the version itself is dead.
+            // Check whether the version is still the current version
+            // of any file.
             let current_reference_count: i64 = transaction.query_row(
                 "
                 SELECT COUNT(*)
@@ -482,17 +491,19 @@ impl MetadataStore {
                 |row| row.get(0),
             )?;
 
+            // Check whether another snapshot still references it.
             let remaining_snapshot_references: i64 = transaction.query_row(
                 "
                 SELECT COUNT(*)
                 FROM snapshot_files
                 WHERE version_id = ?1
-                AND snapshot_id != ?2
                 ",
-                rusqlite::params![version_id, snapshot_id],
+                [version_id],
                 |row| row.get(0),
             )?;
 
+            // If nothing references this version anymore, delete the
+            // version metadata.
             if current_reference_count == 0 && remaining_snapshot_references == 0 {
                 transaction.execute(
                     "DELETE FROM file_version_chunks WHERE version_id = ?1",
@@ -503,17 +514,13 @@ impl MetadataStore {
             }
         }
 
-        transaction.execute(
-            "DELETE FROM snapshot_files WHERE snapshot_id = ?1",
-            [snapshot_id],
-        )?;
-
         transaction.execute("DELETE FROM snapshots WHERE id = ?1", [snapshot_id])?;
 
         transaction.commit()?;
 
         Ok(())
     }
+
     pub fn get_snapshot_manifest(&self, name: &str, path: &Path) -> Result<Vec<String>> {
         let mut statement = self.connection.prepare(
             "
