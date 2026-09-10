@@ -45,6 +45,26 @@ impl Cas {
     fn object_path(&self, hash: &str) -> PathBuf {
         self.objects_path.join(hash)
     }
+
+    pub fn size(&self, hash: &str) -> io::Result<u64> {
+        let object_path = self.object_path(hash);
+        Ok(fs::metadata(object_path)?.len())
+    }
+
+    pub fn stored_size(&self) -> io::Result<u64> {
+        let mut total = 0;
+
+        for entry in fs::read_dir(&self.objects_path)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+
+            if metadata.is_file() {
+                total += metadata.len();
+            }
+        }
+
+        Ok(total)
+    }
 }
 
 #[cfg(test)]

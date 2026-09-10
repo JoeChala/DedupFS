@@ -543,6 +543,31 @@ impl MetadataStore {
 
         rows.collect()
     }
+
+    pub fn current_file_chunks(&self) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            "
+            SELECT fvc.chunk_hash
+            FROM files f
+            JOIN file_version_chunks fvc
+                ON f.current_version_id = fvc.version_id
+            ORDER BY f.id, fvc.chunk_index
+            ",
+        )?;
+
+        let rows = statement.query_map([], |row| row.get(0))?;
+
+        rows.collect()
+    }
+    pub fn list_files(&self) -> Result<Vec<String>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT path FROM files ORDER BY path")?;
+
+        let rows = statement.query_map([], |row| row.get(0))?;
+
+        rows.collect()
+    }
 }
 
 #[cfg(test)]

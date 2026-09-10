@@ -23,6 +23,14 @@ pub struct DedupEngine<'a> {
     metadata: &'a MetadataStore,
 }
 
+pub struct StorageStats {
+    pub file_count: usize,
+    pub logical_size: u64,
+    pub deduplicated_size: u64,
+    pub physical_size: u64,
+    pub unique_chunk_count: usize,
+}
+
 impl<'a> DedupEngine<'a> {
     pub fn new(cas: &'a Cas, metadata: &'a MetadataStore) -> Self {
         Self { cas, metadata }
@@ -164,6 +172,38 @@ impl<'a> DedupEngine<'a> {
 
         Ok(FileManifest {
             chunks: chunk_hashes,
+        })
+    }
+    pub fn stats(&self) -> io::Result<StorageStats> {
+        let files = self.metadata.list_files().map_err(io::Error::other)?;
+
+        let chunk_hashes = self
+            .metadata
+            .current_file_chunks()
+            .map_err(io::Error::other)?;
+
+        let mut logical_size = 0;
+        let mut deduplicated_size = 0;
+        let mut unique_chunks = std::collections::HashSet::new();
+
+        for hash in chunk_hashes {
+            let chunk_size = self.cas.size(&hash)?;
+
+            logical_size += chunk_size;
+
+            if unique_chunks.insert(hash) {
+                deduplicated_size += chunk_size;
+            }
+        }
+
+        let physical_size = self.cas.stored_size()?;
+
+        Ok(StorageStats {
+            file_count: files.len(),
+            logical_size,
+            deduplicated_size,
+            physical_size,
+            unique_chunk_count: unique_chunks.len(),
         })
     }
 }

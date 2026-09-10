@@ -46,6 +46,7 @@ enum Commands {
         #[command(subcommand)]
         command: SnapshotCommand,
     },
+    Stats,
 }
 #[derive(Subcommand)]
 #[command(name = "snapshot")]
@@ -287,6 +288,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         name,
                         destination.display()
                     );
+                }
+            }
+        }
+
+        Commands::Stats => {
+            let current_directory = PathBuf::from(".");
+
+            let repository = match repository::Repository::open(&current_directory) {
+                Ok(repository) => repository,
+                Err(error) => {
+                    eprintln!("Failed to open DedupFS repository: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
+            {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    eprintln!("Failed to open metadata database: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+            let cas = cas::Cas::new(&repository);
+            let engine = dedup::DedupEngine::new(&cas, &metadata);
+
+            match engine.stats() {
+                Ok(stats) => {
+                    println!("Repository statistics");
+                    println!("---------------------");
+                    println!("Files:                {}", stats.file_count);
+                    println!("Logical size:         {} bytes", stats.logical_size);
+                    println!("Deduplicated size:    {} bytes", stats.deduplicated_size);
+                    println!("Physical CAS size:    {} bytes", stats.physical_size);
+                    println!("Unique chunks:        {}", stats.unique_chunk_count);
+
+                    let savings = if stats.logical_size == 0 {
+                        0.0
+                    } else {
+                        100.0 * (1.0 - stats.deduplicated_size as f64 / stats.logical_size as f64)
+                    };
+
+                    println!("Storage savings: {savings:.2}%");
+                }
+                Err(error) => {
+                    eprintln!("Failed to calculate repository statistics: {error}");
+                    std::process::exit(1);
                 }
             }
         }
