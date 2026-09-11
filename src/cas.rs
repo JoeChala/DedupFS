@@ -1,11 +1,12 @@
 //Content-Addressable Storage, turn chunk's hash into a physical storage location
+use crate::hasher::{Hasher, Sha256Hasher};
+use crate::repository::Repository;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::hasher::{Hasher, Sha256Hasher};
-use crate::repository::Repository;
-
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone)]
 pub struct Cas {
     objects_path: PathBuf,
@@ -28,10 +29,27 @@ impl Cas {
             return Ok(hash);
         }
 
-        fs::write(&object_path, data)?;
+        let temporary_id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-        Ok(hash)
+        let temporary_path = self
+            .objects_path
+            .join(format!(".{hash}.tmp-{temporary_id}"));
+
+        fs::write(&temporary_path, data)?;
+
+        match fs::rename(&temporary_path, &object_path) {
+            Ok(()) => Ok(hash),
+            Err(_) if object_path.exists() => {
+                fs::remove_file(&temporary_path).ok();
+                Ok(hash)
+            }
+            Err(error) => {
+                fs::remove_file(&temporary_path).ok();
+                Err(error)
+            }
+        }
     }
+
     pub fn get(&self, hash: &str) -> io::Result<Vec<u8>> {
         let path = self.objects_path.join(hash);
 
@@ -204,5 +222,52 @@ mod tests {
         assert!(result.is_err());
 
         fs::remove_dir_all(directory).expect("temporary directory should be removable");
+    }
+
+    #[test]
+    fn concurrent_puts_store_one_object() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let repository = temporary_repository();
+        let cas = Arc::new(Cas::new(&repository));
+
+        let data = b"concurrent duplicate content";
+        let mut workers = Vec::new();
+
+        for _ in 0..8 {
+            let cas = Arc::clone(&cas);
+
+            workers.push(thread::spawn(move || {
+                cas.put(data).expect("concurrent put should succeed")
+            }));
+        }
+
+        let hashes: Vec<String> = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("worker should not panic"))
+            .collect();
+
+        assert!(hashes.windows(2).all(|pair| pair[0] == pair[1]));
+
+        let object_path = repository.objects_path().join(&hashes[0]);
+
+        assert!(object_path.is_file());
+
+        let objects: Vec<_> = fs::read_dir(repository.objects_path())
+            .expect("objects directory should be readable")
+            .collect();
+
+        assert_eq!(objects.len(), 1);
+
+        fs::remove_dir_all(
+            repository
+                .objects_path()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap(),
+        )
+        .expect("test repository should be removable");
     }
 }
