@@ -120,13 +120,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(manifest) => {
                     let total_chunks = manifest.chunks().len();
 
-                    if let Err(error) =
-                        metadata.store_or_replace_file_manifest(&path, manifest.chunks())
-                    {
-                        eprintln!("Failed to store file metadata: {error}");
-                        std::process::exit(1);
-                    }
-
                     println!(
                         "Ingested {} into {} chunks using {} worker(s).",
                         path.display(),

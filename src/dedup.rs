@@ -47,9 +47,15 @@ impl<'a> DedupEngine<'a> {
             chunk_hashes.push(hash);
         }
 
-        Ok(FileManifest {
+        let manifest = FileManifest {
             chunks: chunk_hashes,
-        })
+        };
+
+        self.metadata
+            .store_or_replace_file_manifest(path, manifest.chunks())
+            .map_err(io::Error::other)?;
+
+        Ok(manifest)
     }
 
     pub fn restore(&self, path: &Path, destination: &Path) -> io::Result<()> {
@@ -202,9 +208,15 @@ impl<'a> DedupEngine<'a> {
 
         let chunk_hashes = results.into_iter().map(|(_, hash)| hash).collect();
 
-        Ok(FileManifest {
+        let manifest = FileManifest {
             chunks: chunk_hashes,
-        })
+        };
+
+        self.metadata
+            .store_or_replace_file_manifest(path, manifest.chunks())
+            .map_err(io::Error::other)?;
+
+        Ok(manifest)
     }
 
     pub fn stats(&self) -> io::Result<StorageStats> {
