@@ -33,8 +33,20 @@ impl Cas {
         Ok(hash)
     }
     pub fn get(&self, hash: &str) -> io::Result<Vec<u8>> {
-        let object_path = self.object_path(hash);
-        fs::read(object_path)
+        let path = self.objects_path.join(hash);
+
+        let data = fs::read(path)?;
+
+        let actual_hash = self.hasher.hash(&data);
+
+        if actual_hash != hash {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "CAS object failed integrity check",
+            ));
+        }
+
+        Ok(data)
     }
 
     pub fn remove(&self, hash: &str) -> io::Result<()> {
@@ -172,55 +184,25 @@ mod tests {
 
         assert_eq!(retrieved, data);
     }
-    /*
     #[test]
-    fn returns_error_for_missing_object() {
-        let repository = temporary_repository();
+    fn rejects_corrupted_object() {
+        let directory = temporary_directory();
+
+        let repository =
+            Repository::init(&directory).expect("repository initialization should succeed");
+
         let cas = Cas::new(&repository);
 
-        let result = cas.get("does-not-exist");
+        let hash = cas.put(b"original data").expect("object should be stored");
 
-        assert!(result.is_err());
+        let object_path = directory.join(".dedupfs").join("objects").join(&hash);
 
-        fs::remove_dir_all(
-            repository
-                .objects_path()
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap(),
-        )
-        .expect("test repository should be removable");
-    }
-
-    #[test]
-    fn detects_corrupted_object() {
-        let repository = temporary_repository();
-        let cas = Cas::new(&repository);
-
-        let data = b"original content";
-        let hash = cas.put(data).expect("object should be stored");
-
-        fs::write(repository.objects_path().join(&hash), b"corrupted content")
-            .expect("object should be corrupted");
+        fs::write(&object_path, b"corrupted data").expect("CAS object should be writable");
 
         let result = cas.get(&hash);
 
         assert!(result.is_err());
-        assert_eq!(
-            result.expect_err("corrupted object should fail").kind(),
-            io::ErrorKind::InvalidData
-        );
 
-        fs::remove_dir_all(
-            repository
-                .objects_path()
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap(),
-        )
-        .expect("test repository should be removable");
+        fs::remove_dir_all(directory).expect("temporary directory should be removable");
     }
-    */
 }
