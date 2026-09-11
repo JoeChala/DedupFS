@@ -192,8 +192,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let collector = gc::GarbageCollector::new(&metadata, &cas);
 
             match collector.collect() {
-                Ok(removed) => {
-                    println!("Garbage collection removed {removed} objects.");
+                Ok(stats) => {
+                    println!(
+                        "Garbage collection removed {} objects.",
+                        stats.objects_removed
+                    );
+                    println!("Reclaimed {} bytes.", stats.bytes_reclaimed);
                 }
                 Err(error) => {
                     eprintln!("Garbage collection failed: {error}");

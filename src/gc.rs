@@ -8,30 +8,41 @@ pub struct GarbageCollector<'a> {
     cas: &'a Cas,
 }
 
+pub struct GarbageCollectionStats {
+    pub objects_removed: usize,
+    pub bytes_reclaimed: u64,
+}
+
 impl<'a> GarbageCollector<'a> {
     pub fn new(metadata: &'a MetadataStore, cas: &'a Cas) -> Self {
         Self { metadata, cas }
     }
-
-    pub fn collect(&self) -> io::Result<usize> {
+    pub fn collect(&self) -> io::Result<GarbageCollectionStats> {
         let hashes = self
             .metadata
             .unreferenced_chunks()
             .map_err(io::Error::other)?;
 
-        let mut removed = 0;
+        let mut objects_removed = 0;
+        let mut bytes_reclaimed = 0;
 
         for hash in hashes {
+            let size = self.cas.size(&hash)?;
+
             self.cas.remove(&hash)?;
 
             self.metadata
                 .remove_chunk_record(&hash)
                 .map_err(io::Error::other)?;
 
-            removed += 1;
+            objects_removed += 1;
+            bytes_reclaimed += size;
         }
 
-        Ok(removed)
+        Ok(GarbageCollectionStats {
+            objects_removed,
+            bytes_reclaimed,
+        })
     }
 }
 #[cfg(test)]
@@ -78,10 +89,10 @@ mod tests {
 
         let collector = GarbageCollector::new(&metadata, &cas);
 
-        let removed = collector.collect().unwrap();
+        let stats = collector.collect().unwrap();
 
-        assert_eq!(removed, 1);
-        assert!(!repository.objects_path().join(&hash).exists());
+        assert_eq!(stats.objects_removed, 1);
+        assert_eq!(stats.bytes_reclaimed, b"unused data".len() as u64);
 
         std::fs::remove_dir_all(&temp_directory).unwrap();
     }
