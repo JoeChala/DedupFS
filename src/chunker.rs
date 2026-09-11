@@ -1,6 +1,6 @@
 use std::io;
 
-const CHUNK_SIZE: usize = 1024;
+pub(crate) const CHUNK_SIZE: usize = 1024; // all modules in dedupfs can use it
 
 pub struct Chunker {
     buffer: Vec<u8>,
@@ -32,6 +32,26 @@ impl Chunker {
         }
 
         chunks
+    }
+
+    pub fn add_bytes_with<F>(&mut self, bytes: &[u8], mut on_chunk: F)
+    where
+        F: FnMut(Vec<u8>),
+    {
+        let mut remaining = bytes;
+
+        while !remaining.is_empty() {
+            let space = CHUNK_SIZE - self.buffer.len();
+            let bytes_to_copy = space.min(remaining.len());
+
+            self.buffer.extend_from_slice(&remaining[..bytes_to_copy]);
+            remaining = &remaining[bytes_to_copy..];
+
+            if self.buffer.len() == CHUNK_SIZE {
+                on_chunk(std::mem::take(&mut self.buffer));
+                self.buffer = Vec::with_capacity(CHUNK_SIZE);
+            }
+        }
     }
 
     pub fn finish(&mut self) -> Option<Vec<u8>> {
@@ -142,6 +162,26 @@ mod tests {
         assert!(chunks[0][..600].iter().all(|byte| *byte == 1));
         assert!(chunks[0][600..].iter().all(|byte| *byte == 2));
         assert!(chunks[1].iter().all(|byte| *byte == 2));
+    }
+
+    #[test]
+    fn emits_completed_chunks_incrementally() {
+        let mut chunker = Chunker::new();
+        let data = vec![42u8; CHUNK_SIZE * 2 + 100];
+        let mut chunks = Vec::new();
+
+        chunker.add_bytes_with(&data, |chunk| {
+            chunks.push(chunk);
+        });
+
+        if let Some(final_chunk) = chunker.finish() {
+            chunks.push(final_chunk);
+        }
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].len(), CHUNK_SIZE);
+        assert_eq!(chunks[1].len(), CHUNK_SIZE);
+        assert_eq!(chunks[2].len(), 100);
     }
 
     #[test]

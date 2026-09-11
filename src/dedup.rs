@@ -1,10 +1,10 @@
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 
 use crate::cas::Cas;
-use crate::chunker::chunk_reader;
+use crate::chunker::{Chunker, chunk_reader};
 use crate::file_reader::FileReader;
 use crate::metadata::MetadataStore;
 
@@ -98,16 +98,14 @@ impl<'a> DedupEngine<'a> {
         }
 
         let mut reader = FileReader::open(path)?;
-        let chunks = chunk_reader(&mut reader)?;
+        let mut chunker = Chunker::new();
 
         let (work_sender, work_receiver) = mpsc::channel::<(usize, Vec<u8>)>();
-
         let (result_sender, result_receiver) = mpsc::channel::<io::Result<(usize, String)>>();
 
-        let mut workers = Vec::with_capacity(worker_count);
-
-        // mpsc::Receiver is not clonable, so put it behind a Mutex.
         let work_receiver = std::sync::Arc::new(std::sync::Mutex::new(work_receiver));
+
+        let mut workers = Vec::with_capacity(worker_count);
 
         for _ in 0..worker_count {
             let receiver = std::sync::Arc::clone(&work_receiver);
@@ -140,21 +138,35 @@ impl<'a> DedupEngine<'a> {
             workers.push(worker);
         }
 
-        // The coordinator no longer needs its copy once all work has
-        // been sent, so we can drop the original result sender later.
-        for (index, chunk) in chunks.into_iter().enumerate() {
-            work_sender.send((index, chunk)).map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "worker threads stopped unexpectedly",
-                )
-            })?;
+        let mut buffer = [0u8; 64 * 1024];
+        let mut next_index = 0;
+
+        loop {
+            let bytes_read = reader.read(&mut buffer)?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            chunker.add_bytes_with(&buffer[..bytes_read], |chunk| {
+                work_sender
+                    .send((next_index, chunk))
+                    .expect("worker threads should still be running");
+
+                next_index += 1;
+            });
+        }
+
+        if let Some(chunk) = chunker.finish() {
+            work_sender
+                .send((next_index, chunk))
+                .expect("worker threads should still be running");
         }
 
         drop(work_sender);
         drop(result_sender);
 
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(next_index);
 
         for result in result_receiver {
             results.push(result?);
@@ -174,6 +186,7 @@ impl<'a> DedupEngine<'a> {
             chunks: chunk_hashes,
         })
     }
+
     pub fn stats(&self) -> io::Result<StorageStats> {
         let files = self.metadata.list_files().map_err(io::Error::other)?;
 
