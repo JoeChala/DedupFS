@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.6.6", features = ["derive"] }
+crossbeam-channel = "0.5.17"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha2 = "0.11.0"
 

@@ -1,6 +1,6 @@
+use crossbeam_channel as mpsc;
 use std::io::{self, Read};
 use std::path::Path;
-use std::sync::mpsc;
 use std::thread;
 
 use crate::cas::Cas;
@@ -100,8 +100,11 @@ impl<'a> DedupEngine<'a> {
         let mut reader = FileReader::open(path)?;
         let mut chunker = Chunker::new();
 
-        let (work_sender, work_receiver) = mpsc::channel::<(usize, Vec<u8>)>();
-        let (result_sender, result_receiver) = mpsc::channel::<io::Result<(usize, String)>>();
+        const WORK_QUEUE_SIZE: usize = 16;
+
+        let (work_sender, work_receiver) = mpsc::bounded::<(usize, Vec<u8>)>(WORK_QUEUE_SIZE);
+
+        let (result_sender, result_receiver) = mpsc::unbounded::<io::Result<(usize, String)>>();
 
         let work_receiver = std::sync::Arc::new(std::sync::Mutex::new(work_receiver));
 
@@ -148,19 +151,36 @@ impl<'a> DedupEngine<'a> {
                 break;
             }
 
+            let mut send_error = None;
+
             chunker.add_bytes_with(&buffer[..bytes_read], |chunk| {
-                work_sender
-                    .send((next_index, chunk))
-                    .expect("worker threads should still be running");
+                if send_error.is_some() {
+                    return;
+                }
+
+                if work_sender.send((next_index, chunk)).is_err() {
+                    send_error = Some(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "worker threads stopped unexpectedly",
+                    ));
+                    return;
+                }
 
                 next_index += 1;
             });
+
+            if let Some(error) = send_error {
+                return Err(error);
+            }
         }
 
         if let Some(chunk) = chunker.finish() {
-            work_sender
-                .send((next_index, chunk))
-                .expect("worker threads should still be running");
+            work_sender.send((next_index, chunk)).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "worker threads stopped unexpectedly",
+                )
+            })?;
         }
 
         drop(work_sender);
