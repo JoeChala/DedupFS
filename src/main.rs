@@ -1,15 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
-
-mod cas;
-mod chunker;
-mod dedup;
-mod file_reader;
-mod gc;
-mod hasher;
-mod metadata;
-mod repository;
+use dedupfs::{cas, dedup, gc, metadata, repository};
 
 #[derive(Parser)]
 #[command(name = "dedupfs")]
