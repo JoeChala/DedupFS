@@ -256,6 +256,7 @@ impl<'a> DedupEngine<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gc::GarbageCollector;
     use crate::repository::Repository;
     use std::fs;
     use std::path::PathBuf;
@@ -515,5 +516,124 @@ mod tests {
         assert!(result.is_err());
 
         std::fs::remove_dir_all(&temp_directory).unwrap();
+    }
+
+    #[test]
+    fn snapshot_preserves_file_after_current_file_is_removed() {
+        let directory = temporary_directory();
+
+        let repository =
+            Repository::init(&directory).expect("repository initialization should succeed");
+
+        let metadata = MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
+        let cas = Cas::new(&repository);
+        let engine = DedupEngine::new(&cas, &metadata);
+
+        let original_path = directory.join("original.txt");
+        let restored_path = directory.join("restored.txt");
+
+        let original_contents = b"important snapshot data";
+
+        fs::write(&original_path, original_contents).expect("original file should be written");
+
+        engine
+            .ingest(&original_path)
+            .expect("file ingestion should succeed");
+
+        metadata
+            .create_snapshot("before-delete")
+            .expect("snapshot creation should succeed");
+
+        metadata
+            .remove_file_manifest(&original_path)
+            .expect("file removal should succeed");
+
+        let collector = GarbageCollector::new(&metadata, &cas);
+
+        let stats = collector
+            .collect()
+            .expect("garbage collection should succeed");
+
+        assert_eq!(stats.objects_removed, 0);
+        assert_eq!(stats.bytes_reclaimed, 0);
+
+        engine
+            .restore_snapshot("before-delete", &original_path, &restored_path)
+            .expect("snapshot restoration should succeed");
+
+        let restored_contents = fs::read(&restored_path).expect("restored file should be readable");
+
+        assert_eq!(restored_contents, original_contents);
+
+        fs::remove_dir_all(&directory).expect("test repository should be removable");
+    }
+    #[test]
+    fn snapshot_preserves_old_content_after_file_replacement() {
+        let directory = temporary_directory();
+
+        let repository =
+            Repository::init(&directory).expect("repository initialization should succeed");
+
+        let metadata = MetadataStore::open(&repository.metadata_database_path()).unwrap();
+
+        metadata.initialize().unwrap();
+
+        let cas = Cas::new(&repository);
+        let engine = DedupEngine::new(&cas, &metadata);
+
+        let file_path = directory.join("file.txt");
+        let current_restore_path = directory.join("current-restored.txt");
+        let snapshot_restore_path = directory.join("snapshot-restored.txt");
+
+        let old_contents = b"content before replacement";
+        let new_contents = b"content after replacement";
+
+        fs::write(&file_path, old_contents).expect("original file should be written");
+
+        engine
+            .ingest(&file_path)
+            .expect("initial ingestion should succeed");
+
+        metadata
+            .create_snapshot("before-replace")
+            .expect("snapshot creation should succeed");
+
+        fs::write(&file_path, new_contents).expect("replacement file should be written");
+
+        engine
+            .ingest(&file_path)
+            .expect("replacement ingestion should succeed");
+
+        engine
+            .restore(&file_path, &current_restore_path)
+            .expect("current file restoration should succeed");
+
+        let current_contents =
+            fs::read(&current_restore_path).expect("current restored file should be readable");
+
+        assert_eq!(current_contents, new_contents);
+
+        engine
+            .restore_snapshot("before-replace", &file_path, &snapshot_restore_path)
+            .expect("snapshot restoration should succeed");
+
+        let snapshot_contents =
+            fs::read(&snapshot_restore_path).expect("snapshot restored file should be readable");
+
+        assert_eq!(snapshot_contents, old_contents);
+
+        let collector = GarbageCollector::new(&metadata, &cas);
+
+        let stats = collector
+            .collect()
+            .expect("garbage collection should succeed");
+
+        assert_eq!(stats.objects_removed, 0);
+        assert_eq!(stats.bytes_reclaimed, 0);
+
+        fs::remove_dir_all(&directory).expect("test repository should be removable");
     }
 }

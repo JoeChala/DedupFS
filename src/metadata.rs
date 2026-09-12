@@ -159,17 +159,6 @@ impl MetadataStore {
             rows.collect::<Result<Vec<String>>>()?
         };
 
-        for hash in old_hashes {
-            transaction.execute(
-                "
-                UPDATE chunks
-                SET reference_count = reference_count - 1
-                WHERE hash = ?1
-                ",
-                [&hash],
-            )?;
-        }
-
         // Create the new immutable version.
         transaction.execute("INSERT INTO file_versions (file_id) VALUES (?1)", [file_id])?;
 
@@ -214,6 +203,16 @@ impl MetadataStore {
         )?;
 
         if snapshot_references == 0 {
+            for hash in old_hashes {
+                transaction.execute(
+                    "
+                    UPDATE chunks
+                    SET reference_count = reference_count - 1
+                    WHERE hash = ?1
+                    ",
+                    [&hash],
+                )?;
+            }
             transaction.execute(
                 "DELETE FROM file_version_chunks WHERE version_id = ?1",
                 [old_version_id],
@@ -243,6 +242,7 @@ impl MetadataStore {
 
         rows.collect()
     }
+
     pub fn remove_file_manifest(&self, path: &Path) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
 
@@ -258,32 +258,6 @@ impl MetadataStore {
             |row| row.get(0),
         )?;
 
-        let hashes: Vec<String> = {
-            let mut statement = transaction.prepare(
-                "
-                SELECT chunk_hash
-                FROM file_version_chunks
-                WHERE version_id = ?1
-                ",
-            )?;
-
-            let rows = statement.query_map([current_version_id], |row| row.get(0))?;
-
-            rows.collect::<Result<Vec<String>>>()?
-        };
-
-        // The current file is no longer referencing this version.
-        for hash in hashes {
-            transaction.execute(
-                "
-                UPDATE chunks
-                SET reference_count = reference_count - 1
-                WHERE hash = ?1
-                ",
-                [&hash],
-            )?;
-        }
-
         let snapshot_references: i64 = transaction.query_row(
             "
             SELECT COUNT(*)
@@ -295,6 +269,31 @@ impl MetadataStore {
         )?;
 
         if snapshot_references == 0 {
+            let hashes: Vec<String> = {
+                let mut statement = transaction.prepare(
+                    "
+                    SELECT chunk_hash
+                    FROM file_version_chunks
+                    WHERE version_id = ?1
+                    ",
+                )?;
+
+                let rows = statement.query_map([current_version_id], |row| row.get(0))?;
+
+                rows.collect::<Result<Vec<String>>>()?
+            };
+
+            for hash in hashes {
+                transaction.execute(
+                    "
+                    UPDATE chunks
+                    SET reference_count = reference_count - 1
+                    WHERE hash = ?1
+                    ",
+                    [&hash],
+                )?;
+            }
+
             transaction.execute(
                 "DELETE FROM file_version_chunks WHERE version_id = ?1",
                 [current_version_id],
@@ -304,15 +303,25 @@ impl MetadataStore {
                 "DELETE FROM file_versions WHERE id = ?1",
                 [current_version_id],
             )?;
-        }
 
-        transaction.execute("DELETE FROM files WHERE id = ?1", [file_id])?;
+            transaction.execute("DELETE FROM files WHERE id = ?1", [file_id])?;
+        } else {
+            // The snapshot still owns this version.
+            // Keep the files row because file_versions.file_id references it.
+            transaction.execute(
+                "
+                UPDATE files
+                SET current_version_id = NULL
+                WHERE id = ?1
+                ",
+                [file_id],
+            )?;
+        }
 
         transaction.commit()?;
 
         Ok(())
     }
-
     pub fn unreferenced_chunks(&self) -> Result<Vec<String>> {
         let mut statement = self.connection.prepare(
             "
@@ -749,7 +758,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(old_count, 1);
+        assert_eq!(old_count, 2);
         assert_eq!(new_count, 1);
     }
     #[test]

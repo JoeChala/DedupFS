@@ -20,7 +20,10 @@ impl Cas {
             hasher: Sha256Hasher,
         }
     }
-
+    pub fn verify(&self, hash: &str) -> io::Result<()> {
+        self.get(hash)?;
+        Ok(())
+    }
     pub fn put(&self, data: &[u8]) -> io::Result<String> {
         let hash = self.hasher.hash(data);
         let object_path = self.object_path(&hash);
@@ -160,7 +163,41 @@ mod tests {
         )
         .expect("test repository should be removable");
     }
+    #[test]
+    fn verify_accepts_valid_object() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
 
+        let repository =
+            Repository::init(directory.path()).expect("repository initialization should succeed");
+
+        let cas = Cas::new(&repository);
+
+        let hash = cas.put(b"valid content").expect("object should be stored");
+
+        cas.verify(&hash)
+            .expect("valid object should pass verification");
+    }
+    #[test]
+    fn verify_rejects_corrupted_object() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+
+        let repository =
+            Repository::init(directory.path()).expect("repository initialization should succeed");
+
+        let cas = Cas::new(&repository);
+
+        let hash = cas
+            .put(b"original content")
+            .expect("object should be stored");
+
+        let object_path = repository.objects_path().join(&hash);
+
+        fs::write(&object_path, b"corrupted content").expect("object should be corrupted");
+
+        let result = cas.verify(&hash);
+
+        assert!(result.is_err(), "corrupted object should fail verification");
+    }
     #[test]
     fn does_not_duplicate_existing_object() {
         let repository = temporary_repository();
