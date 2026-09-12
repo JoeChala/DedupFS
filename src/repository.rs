@@ -1,6 +1,5 @@
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 const DEDUPFS_DIR: &str = ".dedupfs";
 const OBJECTS_DIR: &str = "objects";
@@ -8,12 +7,20 @@ const METADATA_DIR: &str = "metadata";
 const REPOSITORY_MARKER: &str = "repository";
 const METADATA_DATABASE: &str = "dedupfs.db";
 
+#[derive(Debug)]
 pub struct Repository {
     root: PathBuf, //struct needs its own path
 }
 
 impl Repository {
     pub fn init(root: &Path) -> io::Result<Self> {
+        if Self::is_repository(root) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "a DedupFS repository already exists",
+            ));
+        }
+
         let dedupfs_dir = root.join(DEDUPFS_DIR);
 
         fs::create_dir_all(dedupfs_dir.join(OBJECTS_DIR))?;
@@ -82,7 +89,17 @@ mod tests {
 
         fs::remove_dir_all(&directory).expect("test directory should be removable");
     }
+    #[test]
+    fn init_rejects_existing_repository() {
+        let temporary_directory = tempfile::tempdir().expect("failed to create temp directory");
 
+        Repository::init(temporary_directory.path()).expect("first initialization should succeed");
+
+        let error = Repository::init(temporary_directory.path())
+            .expect_err("second initialization should fail");
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    }
     #[test]
     fn detects_initialized_repository() {
         let directory = temporary_directory();
@@ -106,18 +123,27 @@ mod tests {
     }
 
     #[test]
-    fn initialization_is_idempotent() {
-        let directory = temporary_directory();
+    fn init_creates_repository_structure() {
+        let temporary_directory = tempfile::tempdir().expect("failed to create temp directory");
 
-        let first = Repository::init(&directory);
-        assert!(first.is_ok());
+        let repository = Repository::init(temporary_directory.path())
+            .expect("repository initialization should succeed");
 
-        let second = Repository::init(&directory);
-        assert!(second.is_ok());
+        assert!(Repository::is_repository(temporary_directory.path()));
+        assert!(repository.objects_path().is_dir());
+        assert!(repository.metadata_path().is_dir());
+        assert!(!repository.metadata_database_path().exists());
+    }
+    #[test]
+    fn initialization_rejects_existing_repository() {
+        let temporary_directory = tempfile::tempdir().expect("failed to create temp directory");
 
-        assert!(Repository::is_repository(&directory));
+        Repository::init(temporary_directory.path()).expect("first initialization should succeed");
 
-        fs::remove_dir_all(&directory).expect("test directory should be removable");
+        let second = Repository::init(temporary_directory.path())
+            .expect_err("second initialization should fail");
+
+        assert_eq!(second.kind(), io::ErrorKind::AlreadyExists);
     }
 
     #[test]

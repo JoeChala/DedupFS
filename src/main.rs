@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use dedupfs::{cas, dedup, gc, metadata, repository};
@@ -60,6 +60,19 @@ enum SnapshotCommand {
     },
 }
 
+fn open_repository()
+-> Result<(repository::Repository, metadata::MetadataStore), Box<dyn std::error::Error>> {
+    let current_directory = PathBuf::from(".");
+
+    let repository = repository::Repository::open(&current_directory)
+        .map_err(|error| format!("Failed to open DedupFS repository: {error}"))?;
+
+    let metadata = metadata::MetadataStore::open(&repository.metadata_database_path())
+        .map_err(|error| format!("Failed to open metadata database: {error}"))?;
+
+    Ok((repository, metadata))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -88,24 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Commands::Ingest { path, workers } => {
-            let current_directory = PathBuf::from(".");
-
-            let repository = match repository::Repository::open(&current_directory) {
-                Ok(repository) => repository,
-                Err(error) => {
-                    eprintln!("Failed to open DedupFS repository: {error}");
-                    std::process::exit(1);
-                }
-            };
-
-            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
-            {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    eprintln!("Failed to open metadata database: {error}");
-                    std::process::exit(1);
-                }
-            };
+            let (repository, metadata) = open_repository()?;
 
             let cas = cas::Cas::new(&repository);
             let engine = dedup::DedupEngine::new(&cas, &metadata);
@@ -135,24 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Commands::Restore { path, destination } => {
-            let current_directory = PathBuf::from(".");
-
-            let repository = match repository::Repository::open(&current_directory) {
-                Ok(repository) => repository,
-                Err(error) => {
-                    eprintln!("Failed to open DedupFS repository: {error}");
-                    std::process::exit(1);
-                }
-            };
-
-            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
-            {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    eprintln!("Failed to open metadata database: {error}");
-                    std::process::exit(1);
-                }
-            };
+            let (repository, metadata) = open_repository()?;
 
             let cas = cas::Cas::new(&repository);
             let engine = dedup::DedupEngine::new(&cas, &metadata);
@@ -169,24 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Commands::Gc => {
-            let current_directory = PathBuf::from(".");
-
-            let repository = match repository::Repository::open(&current_directory) {
-                Ok(repository) => repository,
-                Err(error) => {
-                    eprintln!("Failed to open DedupFS repository: {error}");
-                    std::process::exit(1);
-                }
-            };
-
-            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
-            {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    eprintln!("Failed to open metadata database: {error}");
-                    std::process::exit(1);
-                }
-            };
+            let (repository, metadata) = open_repository()?;
 
             let cas = cas::Cas::new(&repository);
             let collector = gc::GarbageCollector::new(&metadata, &cas);
@@ -207,24 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Commands::Remove { path } => {
-            let current_directory = PathBuf::from(".");
-
-            let repository = match repository::Repository::open(&current_directory) {
-                Ok(repository) => repository,
-                Err(error) => {
-                    eprintln!("Failed to open DedupFS repository: {error}");
-                    std::process::exit(1);
-                }
-            };
-
-            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
-            {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    eprintln!("Failed to open metadata database: {error}");
-                    std::process::exit(1);
-                }
-            };
+            let (_repository, metadata) = open_repository()?;
 
             match metadata.remove_file_manifest(&path) {
                 Ok(()) => {
@@ -237,9 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Snapshot { command } => {
-            let repository = repository::Repository::open(Path::new("."))?;
-
-            let metadata = metadata::MetadataStore::open(&repository.metadata_database_path())?;
+            let (repository, metadata) = open_repository()?;
 
             match command {
                 SnapshotCommand::Create { name } => {
@@ -282,24 +225,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Commands::Stats => {
-            let current_directory = PathBuf::from(".");
-
-            let repository = match repository::Repository::open(&current_directory) {
-                Ok(repository) => repository,
-                Err(error) => {
-                    eprintln!("Failed to open DedupFS repository: {error}");
-                    std::process::exit(1);
-                }
-            };
-
-            let metadata = match metadata::MetadataStore::open(&repository.metadata_database_path())
-            {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    eprintln!("Failed to open metadata database: {error}");
-                    std::process::exit(1);
-                }
-            };
+            let (repository, metadata) = open_repository()?;
 
             let cas = cas::Cas::new(&repository);
             let engine = dedup::DedupEngine::new(&cas, &metadata);
