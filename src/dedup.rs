@@ -259,15 +259,12 @@ mod tests {
     use crate::repository::Repository;
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use tempfile;
 
     fn temporary_directory() -> PathBuf {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after Unix epoch")
-            .as_nanos();
-
-        std::env::temp_dir().join(format!("dedupfs-dedup-test-{timestamp}"))
+        tempfile::tempdir()
+            .expect("temporary directory should be created")
+            .keep()
     }
 
     #[test]

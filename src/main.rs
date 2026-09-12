@@ -193,8 +193,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 SnapshotCommand::List => {
                     let snapshots = metadata.list_snapshots()?;
 
-                    for snapshot in snapshots {
-                        println!("{}  {}", snapshot.id, snapshot.name);
+                    if snapshots.is_empty() {
+                        println!("No snapshots found.");
+                    } else {
+                        for snapshot in snapshots {
+                            println!("{}  {}", snapshot.id, snapshot.name);
+                        }
                     }
                 }
 
