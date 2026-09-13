@@ -348,6 +348,7 @@ impl MetadataStore {
 
         Ok(())
     }
+
     pub fn create_snapshot(&self, name: &str) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
 
@@ -572,6 +573,30 @@ impl MetadataStore {
         let mut statement = self
             .connection
             .prepare("SELECT path FROM files ORDER BY path")?;
+
+        let rows = statement.query_map([], |row| row.get(0))?;
+
+        rows.collect()
+    }
+
+    pub fn referenced_chunk_hashes(&self) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            "
+            SELECT DISTINCT fvc.chunk_hash
+            FROM file_version_chunks AS fvc
+            INNER JOIN files AS f
+                ON f.current_version_id = fvc.version_id
+
+            UNION
+
+            SELECT DISTINCT fvc.chunk_hash
+            FROM file_version_chunks AS fvc
+            INNER JOIN snapshot_files AS sf
+                ON sf.version_id = fvc.version_id
+
+            ORDER BY chunk_hash
+            ",
+        )?;
 
         let rows = statement.query_map([], |row| row.get(0))?;
 
@@ -871,5 +896,49 @@ mod tests {
             .unwrap();
 
         assert_eq!(after_delete, 1);
+    }
+    #[test]
+    fn referenced_chunk_hashes_include_current_files_and_snapshots() {
+        let temporary_directory =
+            tempfile::tempdir().expect("failed to create temporary directory");
+
+        let database_path = temporary_directory.path().join("metadata.db");
+
+        let metadata = MetadataStore::open(&database_path).expect("failed to open metadata store");
+
+        metadata
+            .initialize()
+            .expect("failed to initialize metadata schema");
+
+        metadata
+            .store_or_replace_file_manifest(
+                Path::new("file.txt"),
+                &["hash-a".to_string(), "hash-shared".to_string()],
+            )
+            .expect("failed to store initial manifest");
+
+        metadata
+            .create_snapshot("before-replacement")
+            .expect("failed to create snapshot");
+
+        metadata
+            .store_or_replace_file_manifest(
+                Path::new("file.txt"),
+                &["hash-b".to_string(), "hash-shared".to_string()],
+            )
+            .expect("failed to replace manifest");
+
+        let hashes = metadata
+            .referenced_chunk_hashes()
+            .expect("failed to retrieve referenced hashes");
+
+        assert_eq!(
+            hashes,
+            vec![
+                "hash-a".to_string(),
+                "hash-b".to_string(),
+                "hash-shared".to_string(),
+            ]
+        );
     }
 }
