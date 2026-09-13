@@ -6,3 +6,4 @@ pub mod gc;
 pub mod hasher;
 pub mod metadata;
 pub mod repository;
+pub mod verify;

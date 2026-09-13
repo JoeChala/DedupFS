@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use dedupfs::{cas, dedup, gc, metadata, repository};
+use dedupfs::{cas, dedup, gc, metadata, repository, verify};
 
 #[derive(Parser)]
 #[command(name = "dedupfs")]
@@ -39,6 +39,8 @@ enum Commands {
         command: SnapshotCommand,
     },
     Stats,
+    /// Verify referenced CAS objects exist and match their hashes
+    Verify,
 }
 #[derive(Subcommand)]
 #[command(name = "snapshot")]
@@ -254,6 +256,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(error) => {
                     eprintln!("Failed to calculate repository statistics: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::Verify => {
+            let (repository, metadata) = open_repository()?;
+
+            let cas = cas::Cas::new(&repository);
+            let verifier = verify::RepositoryVerifier::new(&metadata, &cas);
+
+            match verifier.verify() {
+                Ok(stats) => {
+                    println!("Repository verification passed.");
+                    println!("Verified {} chunks.", stats.chunks_verified);
+                }
+                Err(error) => {
+                    eprintln!("Repository verification failed.");
+                    eprintln!("{error}");
                     std::process::exit(1);
                 }
             }
