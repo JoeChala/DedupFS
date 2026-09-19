@@ -47,3 +47,4 @@ Build the project:
 
 ```bash
 cargo build
+```

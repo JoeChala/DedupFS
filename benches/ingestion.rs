@@ -122,6 +122,101 @@ fn benchmark_deduplication(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_ingestion, benchmark_deduplication);
+fn benchmark_storage_efficiency(c: &mut Criterion) {
+    let mut group = c.benchmark_group("storage_efficiency");
+
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(30);
+
+    let workloads = [("repeated_data", 0), ("mixed_data", 1), ("unique_data", 2)];
+
+    for (name, workload) in workloads {
+        group.bench_function(name, |b| {
+            b.iter_batched(
+                || {
+                    let directory = temporary_directory();
+
+                    let (_repository, metadata, cas) = create_repository(&directory);
+
+                    let input_path = directory.join("input.bin");
+
+                    let data = match workload {
+                        // Highly repetitive: excellent for deduplication.
+                        0 => vec![b'a'; 16 * 1024 * 1024],
+
+                        // Mixed workload: repeated regions plus unique regions.
+                        1 => {
+                            let mut data = Vec::with_capacity(16 * 1024 * 1024);
+
+                            for i in 0..(16 * 1024) {
+                                if i % 2 == 0 {
+                                    data.extend_from_slice(&vec![b'a'; 1024]);
+                                } else {
+                                    let chunk = (i as u64).to_le_bytes();
+                                    for _ in 0..128 {
+                                        data.extend_from_slice(&chunk);
+                                    }
+                                }
+                            }
+
+                            data
+                        }
+
+                        // Unique data: each chunk should contain different content.
+                        2 => {
+                            let mut data = Vec::with_capacity(16 * 1024 * 1024);
+
+                            for i in 0..(16 * 1024) {
+                                let value = (i as u64).to_le_bytes();
+
+                                for _ in 0..1024 {
+                                    data.extend_from_slice(&value);
+                                }
+                            }
+
+                            data.truncate(16 * 1024 * 1024);
+                            data
+                        }
+
+                        _ => unreachable!(),
+                    };
+
+                    fs::write(&input_path, data).expect("benchmark input should be writable");
+
+                    (directory, input_path, metadata, cas)
+                },
+                |(directory, input_path, metadata, cas)| {
+                    let engine = DedupEngine::new(&cas, &metadata);
+
+                    engine
+                        .ingest(black_box(&input_path))
+                        .expect("ingestion should succeed");
+
+                    let stats = engine.stats().expect("storage statistics should succeed");
+
+                    black_box((
+                        stats.logical_size,
+                        stats.deduplicated_size,
+                        stats.physical_size,
+                        stats.unique_chunk_count,
+                    ));
+
+                    fs::remove_dir_all(directory)
+                        .expect("benchmark repository should be removable");
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    benchmark_ingestion,
+    benchmark_deduplication,
+    benchmark_storage_efficiency
+);
 
 criterion_main!(benches);
